@@ -1,0 +1,16 @@
+/* This makes the main note windows rounded */
+.workspace-leaf, .workspace-tabs, .view-content {
+    border-radius: 25px !important;
+    overflow: hidden !important;
+}
+
+/* This makes your Dataview cards extra bubbly */
+.cards table.dataview tbody tr {
+    border-radius: 30px !important;
+    border: 2px solid var(--interactive-accent) !important;
+}
+
+/* This rounds the images you paste into your notes */
+img {
+    border-radius: 22px !important;
+}

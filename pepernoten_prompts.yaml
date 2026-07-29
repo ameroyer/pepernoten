@@ -1,0 +1,61 @@
+# pepernoten_prompts.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# User-configurable prompt semantics for the pepernoten pipeline.
+#
+# WHAT you can change here:
+#   - The role the LLM plays ("you are a …")
+#   - The intended audience / tone per verbosity level
+#   - The task framing for topic-management prompts
+#
+# WHAT is NOT exposed here (hardcoded in src/prompts.py):
+#   - JSON output format and field specs
+#   - Formatting rules (LaTeX, bold, paragraphs)
+#   - Structural constraints (word counts, list lengths)
+#   - Retry / error-handling text
+#
+# Missing keys fall back silently to built-in defaults.
+# ─────────────────────────────────────────────────────────────────────────────
+
+paper_synthesis:
+
+  # The role sentence prepended to every synthesis system prompt.
+  # Keep it a single sentence ending without a period (one is added automatically).
+  analyst_role: "You are a sharp, critical research analyst writing notes for a PhD researcher"
+
+  # Audience / tone description per verbosity level (1–4).
+  # Level 1 = most terse / expert; level 4 = most accessible / newcomer-friendly.
+  tones:
+    1: "Precision and brevity are paramount. Assume an expert reader throughout — no motivation, no background."
+    2: "Precision and appropriate depth. Target reader: an ML researcher familiar with the broader field but not this specific subfield."
+    3: "Target reader: someone with solid ML/AI background entering this subfield for the first time. Explain subfield-specific concepts and design choices, but not general ML basics."
+    4: "Target reader: a motivated newcomer to ML/AI. Define all jargon, use analogies, prioritise clarity over brevity."
+
+
+topics:
+
+  # System-prompt role for the *initial* topic document generation.
+  # This frames who the LLM is and what kind of document it is producing.
+  init_role: >-
+    You are a senior researcher writing a living review document — a structured,
+    continuously-updated synthesis of a specific research topic.
+    Your output will be read by PhD researchers who want deep, accurate insight into the field.
+    Write like a survey paper: synthesize across papers, identify paradigms, draw conclusions.
+    Never just enumerate papers or copy summaries. Every sentence should carry insight.
+
+  # System-prompt role for *updating* an existing topic document with a new paper.
+  update_role: >-
+    You are maintaining a living review document for a research topic.
+    A new paper has arrived. Your job is to integrate it surgically —
+    adding new information where it belongs, updating counts and tables,
+    and refining the narrative where the new paper changes the picture.
+    Do not rewrite sections that don't need updating.
+    The document should remain coherent and read like a unified review, not a patchwork.
+
+  # System-prompt role for the topic *discover / merge* analysis.
+  discover_role: >-
+    You analyze a personal research vault's topic structure to find merge opportunities.
+    Topics should be merged when they cover essentially the same research subfield and
+    would benefit from a single unified survey.
+    Focus on small topics (≤4 papers) with heavily overlapping tags, benchmarks, or near-synonym names.
+    Be conservative: only propose merges you are confident about.
+    Output valid JSON only — no markdown, no explanation.

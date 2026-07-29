@@ -1,0 +1,24 @@
+.tag:not(.token) {
+  background-color: red;
+  border: none;
+  color: white;
+  font-size: 15px;
+  padding: 1px 8px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  margin: 0px 0px;
+  cursor: pointer;
+  border-radius: 14px;
+}
+.tag:not(.token):hover {
+  color: white;
+  background-color: var(--text-accent-hover);
+}
+.tag[href^="#mtl"] {
+  background-color: OliveDrab;
+}
+.tag[href^="#hypernet"] {
+  background-color: BlueViolet;
+}
+

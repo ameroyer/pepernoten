@@ -1,0 +1,310 @@
+<title>pepernoten — developer guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#fbfaf7; --panel:#ffffff; --ink:#1c1b19; --ink-dim:#5b584f;
+    --border:#e7e3d9; --accent:#2f7a4d; --accent-soft:#e7f3ec;
+    --code-bg:#f3f1ea; --code-ink:#3a3833;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#15140f; --panel:#1c1b16; --ink:#eee9dd; --ink-dim:#a9a495;
+      --border:#332f24; --accent:#6fce9a; --accent-soft:#1e2b22;
+      --code-bg:#100f0b; --code-ink:#d8d3c4;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#15140f; --panel:#1c1b16; --ink:#eee9dd; --ink-dim:#a9a495;
+    --border:#332f24; --accent:#6fce9a; --accent-soft:#1e2b22;
+    --code-bg:#100f0b; --code-ink:#d8d3c4;
+  }
+  :root[data-theme="light"]{
+    --bg:#fbfaf7; --panel:#ffffff; --ink:#1c1b19; --ink-dim:#5b584f;
+    --border:#e7e3d9; --accent:#2f7a4d; --accent-soft:#e7f3ec;
+    --code-bg:#f3f1ea; --code-ink:#3a3833;
+  }
+
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  a{color:var(--accent); text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  code, pre{
+    font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size:0.86em;
+  }
+  code{background:var(--code-bg); color:var(--code-ink); padding:0.15em 0.4em; border-radius:4px;}
+  pre{
+    background:var(--code-bg); color:var(--code-ink); padding:14px 16px; border-radius:8px;
+    overflow-x:auto; border:1px solid var(--border);
+  }
+  pre code{background:none; padding:0; border-radius:0;}
+
+  .layout{display:flex; max-width:1180px; margin:0 auto;}
+
+  nav.toc{
+    flex:0 0 230px; position:sticky; top:0; align-self:flex-start;
+    height:100vh; overflow-y:auto; padding:28px 18px 28px 24px;
+    border-right:1px solid var(--border);
+  }
+  nav.toc .brand{font-weight:700; font-size:1.05em; margin-bottom:4px;}
+  nav.toc .tagline{color:var(--ink-dim); font-size:0.8em; margin-bottom:20px;}
+  nav.toc ul{list-style:none; margin:0; padding:0;}
+  nav.toc li{margin:2px 0;}
+  nav.toc a{
+    display:block; color:var(--ink-dim); font-size:0.88em; padding:4px 8px;
+    border-radius:6px;
+  }
+  nav.toc a:hover{background:var(--accent-soft); color:var(--ink); text-decoration:none;}
+  nav.toc .section-label{
+    font-size:0.72em; text-transform:uppercase; letter-spacing:0.06em;
+    color:var(--ink-dim); margin:16px 0 4px 8px; opacity:0.7;
+  }
+
+  main{flex:1; min-width:0; padding:40px 48px 100px; max-width:820px;}
+  main h1{font-size:1.9em; margin-bottom:0.1em;}
+  main h1 + p.lede{color:var(--ink-dim); font-size:1.05em; margin-top:0.3em;}
+  main h2{
+    font-size:1.35em; margin-top:2.6em; padding-top:0.4em;
+    border-top:1px solid var(--border);
+  }
+  main h3{font-size:1.05em; margin-top:1.8em;}
+  main p{color:var(--ink);}
+  main ul, main ol{padding-left:1.3em;}
+  main li{margin:0.3em 0;}
+
+  table{border-collapse:collapse; width:100%; margin:1em 0; font-size:0.9em;}
+  th, td{border:1px solid var(--border); padding:6px 10px; text-align:left; vertical-align:top;}
+  th{background:var(--panel); color:var(--ink-dim); font-weight:600;}
+
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:16px 18px; margin:1em 0;
+  }
+  .card.principles{display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px;}
+  .card.principles div{padding:2px;}
+  .card.principles b{color:var(--accent);}
+
+  .pill{
+    display:inline-block; font-size:0.75em; font-weight:600; padding:2px 8px;
+    border-radius:999px; background:var(--accent-soft); color:var(--accent);
+    margin-right:6px;
+  }
+
+  .imports{
+    font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size:0.82em; line-height:1.7; white-space:pre; overflow-x:auto;
+    background:var(--code-bg); color:var(--code-ink); padding:14px 16px;
+    border-radius:8px; border:1px solid var(--border);
+  }
+
+  footer{
+    max-width:820px; margin:0 auto; padding:20px 48px 60px; color:var(--ink-dim); font-size:0.85em;
+  }
+
+  @media (max-width: 860px){
+    .layout{display:block;}
+    nav.toc{position:static; height:auto; border-right:none; border-bottom:1px solid var(--border);}
+    main{padding:28px 20px 80px; max-width:100%;}
+    footer{padding:20px; max-width:100%;}
+  }
+</style>
+
+<div class="layout">
+  <nav class="toc">
+    <div class="brand">🍬 pepernoten</div>
+    <div class="tagline">developer guide</div>
+    <ul>
+      <li><a href="#quickstart">Quickstart</a></li>
+      <li><a href="#principles">Design principles</a></li>
+      <li><a href="#layout">Repository layout</a></li>
+      <li><a href="#imports">Import graph</a></li>
+      <li><a href="#pipeline">Parsing pipeline</a></li>
+      <li><a href="#data">Key data structures</a></li>
+      <li><a href="#prompts">Prompt configuration</a></li>
+    </ul>
+    <div class="section-label">Contributing</div>
+    <ul>
+      <li><a href="#responsibilities">Module responsibilities</a></li>
+      <li><a href="#import-rules">Import rules</a></li>
+      <li><a href="#style">Code style</a></li>
+      <li><a href="#testing">Testing &amp; CI</a></li>
+      <li><a href="#common-tasks">Common tasks</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <h1>pepernoten developer guide</h1>
+    <p class="lede">For contributors who want to understand, extend, or debug the codebase. For usage docs, see the <a href="../README.md">README</a>.</p>
+
+    <h2 id="quickstart">Quickstart</h2>
+    <pre><code>git clone &lt;repo&gt;
+cd pepernoten
+uv sync
+export OPENROUTER_API_KEY=sk-or-...
+
+# Round-trip a paper end to end
+uv run scripts/parse.py parse https://arxiv.org/abs/2405.12345 --verbosity=1
+
+# Lint, type-check, test — same checks CI runs
+uv run ruff check .
+uv run pyright
+uv run pytest</code></pre>
+    <p>The vault <em>is</em> the project root — Obsidian points at the repo, and parsed notes land under <code>Research/</code>. There's no separate install step to package or deploy: everything runs in place with <code>uv run</code>.</p>
+
+    <h2 id="principles">Design principles</h2>
+    <div class="card principles">
+      <div><b>Minimalism</b><br>No feature added speculatively, no abstraction before it's needed three times.</div>
+      <div><b>Cleanliness</b><br>One responsibility per file, no cross-layer imports going the wrong way.</div>
+      <div><b>Modularity</b><br>A single path constant, a single LLM client, a single index format — used everywhere.</div>
+    </div>
+
+    <h2 id="layout">Repository layout</h2>
+    <pre><code>pepernoten/
+├── pepernoten_cli.py       REPL entry point (questionary + rich UI)
+├── pepernoten_prompts.yaml user-configurable prompt semantics
+├── pyproject.toml          dependencies, entry point, ruff + pyright config
+│
+├── src/                    LIBRARY — pure modules, no fire.Fire, no __main__
+│   ├── vault.py              path constants, index I/O, tag index, topic file I/O
+│   ├── llm.py                OpenRouter client + call() / call_json()
+│   ├── arxiv_utils.py        rate limiter, HTML fetch, ID extraction, Scholar Inbox
+│   ├── notes.py              note parsing, topic matching, backlinks, related-work extraction
+│   ├── figures.py            HTML + PDF figure extraction, vision-assisted banner selection
+│   ├── prompts.py            all LLM prompt builders (paper synthesis + topic surveys)
+│   ├── paper.py              process_arxiv_paper — the main end-to-end pipeline
+│   └── bibtex.py             BibTeX lookup (PWC → CrossRef → Semantic Scholar → DBLP)
+│
+├── scripts/                CLI WRAPPERS — thin fire.Fire entry points
+│   ├── parse.py               parse / parse_many / sync / backlink_all
+│   ├── topic_manager.py       create / init / init_all / update / discover / list / backlink_topics
+│   └── bibtex.py              generate / batch / clear_cache
+│
+└── tests/                  pure-logic unit tests (no network, no LLM calls)</code></pre>
+
+    <h2 id="imports">Import graph</h2>
+    <p>No cycles. <code>src/</code> modules never import from <code>scripts/</code>; the CLI imports from both layers.</p>
+    <div class="imports">pepernoten_cli
+    ├── vault, arxiv_utils
+    ├── scripts/parse   ──► paper ──► vault, llm, arxiv_utils, notes, figures, prompts, bibtex
+    └── src/bibtex
+
+scripts/parse         ──► paper, vault, notes, arxiv_utils
+scripts/topic_manager ──► llm, vault, notes, prompts
+scripts/bibtex        ──► src/bibtex
+
+src/prompts  ──► notes          (note_xml)
+src/figures  ──► vault, arxiv_utils
+src/paper    ──► vault, llm, arxiv_utils, notes, figures, prompts, bibtex
+src/notes    ──► vault
+src/bibtex   ──► vault</div>
+
+    <h2 id="pipeline">Parsing pipeline</h2>
+    <p><code>paper.process_arxiv_paper(arxiv_url, model, vision_model, openrouter_api_key, verbosity)</code> is the main entry point. Roughly:</p>
+    <ol>
+      <li><b>Metadata</b> — arXiv Atom API, 4-attempt retry with exponential backoff.</li>
+      <li><b>HTML</b> — tries <code>arxiv.org/html/{id}</code>, falls back to <code>ar5iv.labs.arxiv.org</code>.</li>
+      <li><b>Figure extraction</b> — parses <code>&lt;figure&gt;</code> tags, downloads rasters. Unresolved figures go into <code>needs_pdf</code>.</li>
+      <li><b>PDF fallback</b> — downloaded only if HTML is unavailable or figures are still missing.</li>
+      <li><b>Banner selection</b> — a vision model picks the best figure from up to 6 candidates.</li>
+      <li><b>LLM synthesis</b> — system prompt (verbosity + tag vocabulary) + figures/paper text via <code>llm.call_json</code> (3-attempt JSON repair loop).</li>
+      <li><b>Note assembly</b> — frontmatter + TL;DR + sections + related-work table + BibTeX written to <code>Research/</code>.</li>
+      <li><b>Related-work lookup</b> — fills in missing arXiv IDs via fuzzy title search.</li>
+      <li><b>Index + backlinks</b> — paper registered in <code>.paper_index.json</code>; wikilinks added to notes that mention it.</li>
+      <li><b>Topic update</b> — matching topics are updated, unmatched papers trigger topic discovery.</li>
+    </ol>
+
+    <h2 id="data">Key data structures</h2>
+    <h3>Paper index — <code>Research/.paper_index.json</code></h3>
+    <pre><code>{ "2405.12345": {"title": "Paper Title", "file": "Paper Title.md"} }</code></pre>
+
+    <h3>Topic index — <code>Research/Topics/.topic_index.json</code></h3>
+    <pre><code>{
+  "streaming-video-llms": {
+    "name": "Streaming Video LLMs",
+    "file": "Topics/streaming-video-llms.md",
+    "fingerprint_tags": ["streaming-video", "kv-cache", "video-llm"],
+    "fingerprint_benchmarks": ["StreamingBench", "OvO-Bench"],
+    "min_tag_overlap": 2,
+    "papers": ["2405.12345"],
+    "last_updated": "2026-06-20"
+  }
+}</code></pre>
+    <p>A paper matches a topic if it shares ≥ <code>min_tag_overlap</code> tags from <code>fingerprint_tags</code>, OR any <code>fingerprint_benchmarks</code> — see <code>notes.match_topics</code>.</p>
+
+    <h3>Topic file structure</h3>
+    <pre><code>---                     ← YAML frontmatter (topic metadata)
+topic: "Streaming Video LLMs"
+slug: streaming-video-llms
+---
+
+## Introduction         ← LLM-written body (never modified by the tooling)
+## Benchmarks
+## Methods &amp; Baselines
+## Techniques &amp; Tricks
+## Architecture Overview
+## Open Problems &amp; Gaps
+
+---
+## Method Index          ← appended by write_topic_file (stripped before the LLM sees it)
+---
+## Papers                ← appended by write_topic_file (Obsidian backlinks)</code></pre>
+    <p><code>read_topic_content()</code> strips everything from <code>## Method Index</code> downward before handing content to the LLM, so those sections are always regenerated fresh on every write.</p>
+
+    <h2 id="prompts">Prompt configuration</h2>
+    <p>All user-facing prompt semantics (roles, tones) live in <code>pepernoten_prompts.yaml</code>. Code in <code>src/prompts.py</code> loads it via <code>_cfg_get(dot.path, default)</code> — missing keys fall back to hardcoded defaults silently. Only <em>semantics</em> are configurable; JSON output format, field specs, and retry logic are not.</p>
+
+    <h2 id="responsibilities">Module responsibilities</h2>
+    <table>
+      <tr><th>Module</th><th>Owns</th><th>Does not own</th></tr>
+      <tr><td><code>src/vault.py</code></td><td>All path constants, index read/write, topic file I/O</td><td>LLM calls, network I/O</td></tr>
+      <tr><td><code>src/llm.py</code></td><td>OpenRouter client, <code>call()</code> / <code>call_json()</code></td><td>Prompt text, retry logic beyond basic</td></tr>
+      <tr><td><code>src/arxiv_utils.py</code></td><td>Rate limiters, arXiv HTML fetch, ID extraction, Scholar Inbox</td><td>Figure parsing, note writing</td></tr>
+      <tr><td><code>src/notes.py</code></td><td>Note parsing, topic matching, backlinks, changelog</td><td>Index I/O, network</td></tr>
+      <tr><td><code>src/figures.py</code></td><td>HTML + PDF figure extraction, vision selection</td><td>Note assembly, LLM prompts</td></tr>
+      <tr><td><code>src/prompts.py</code></td><td>All prompt strings for synthesis and topic surveys</td><td>LLM calls, file I/O</td></tr>
+      <tr><td><code>src/paper.py</code></td><td>End-to-end <code>process_arxiv_paper</code> pipeline</td><td>CLI, topic update orchestration</td></tr>
+      <tr><td><code>src/bibtex.py</code></td><td>BibTeX lookup cascade + cache</td><td>Note UI, clipboard</td></tr>
+      <tr><td><code>scripts/*.py</code></td><td><code>fire.Fire</code> CLI wrappers, batch orchestration</td><td>Business logic (lives in <code>src/</code>)</td></tr>
+      <tr><td><code>pepernoten_cli.py</code></td><td>Interactive REPL, rich/questionary UI</td><td>All logic (delegates to <code>src/</code> and <code>scripts/</code>)</td></tr>
+    </table>
+
+    <h2 id="import-rules">Import rules</h2>
+    <ul>
+      <li><code>src/</code> modules import from other <code>src/</code> modules only — never from <code>scripts/</code>.</li>
+      <li><code>scripts/</code> modules import from <code>src/</code> — never from each other, except <code>parse.py</code> lazily importing <code>topic_manager</code> inside <code>_batch_update_topics</code>.</li>
+      <li><code>pepernoten_cli.py</code> imports from both layers.</li>
+    </ul>
+    <p>If you find yourself needing to import from <code>scripts/</code> inside <code>src/</code>, the logic belongs in <code>src/</code> instead.</p>
+    <p><span class="pill">LLM calls</span> Always use <code>llm.call()</code> / <code>llm.call_json()</code>. Never instantiate <code>OpenAI</code> directly. Always OpenRouter (<code>https://openrouter.ai/api/v1</code>) — never the Anthropic API directly.</p>
+    <p><span class="pill">Rate limiting</span> New arXiv API calls use <code>arxiv_api.wait()</code>; static asset downloads use <code>arxiv_asset.wait()</code> — both from <code>src/arxiv_utils.py</code>.</p>
+
+    <h2 id="style">Code style</h2>
+    <ul>
+      <li>No comments unless the <em>why</em> is genuinely non-obvious (a hidden constraint, a workaround, a subtle invariant).</li>
+      <li>No docstrings for obvious functions — the name should explain it.</li>
+      <li>Type annotations aren't required, but use them where they clarify complex signatures.</li>
+      <li>No emoji in code or comments.</li>
+      <li>Prefer flat code over deeply nested helpers for one-off logic.</li>
+    </ul>
+
+    <h2 id="testing">Testing &amp; CI</h2>
+    <p><code>tests/</code> covers pure logic only — note/frontmatter parsing, topic matching, arXiv ID extraction, BibTeX key generation, LLM JSON extraction. Nothing that hits the network or calls an LLM: those paths are exercised by hand via the quickstart round-trip above.</p>
+    <pre><code>uv run pytest</code></pre>
+    <p>GitHub Actions (<code>.github/workflows/ci.yml</code>) runs <code>ruff check</code> and <code>pytest</code> on every push and pull request.</p>
+
+    <h2 id="common-tasks">Common tasks</h2>
+    <ul>
+      <li><b>New CLI command</b> — implement in the appropriate <code>src/</code> module → thin wrapper in the relevant <code>scripts/</code> file → register in <code>fire.Fire({...})</code> → add a <code>cmd_*</code> function in <code>pepernoten_cli.py</code> if it needs to be interactive.</li>
+      <li><b>New BibTeX source</b> — add a <code>try</code>/<code>except</code> block in <code>src/bibtex.py</code>'s <code>generate()</code> between the existing source attempts. The <code>@misc</code> fallback at the end is unconditional.</li>
+      <li><b>New note field</b> — extend the f-string in <code>src/paper.py</code> and add the field spec to <code>src/prompts.py</code>'s <code>_field_specs()</code> for the relevant verbosity levels. Frontmatter fields that need to be read back also go in <code>vault.note_meta()</code>.</li>
+      <li><b>New prompt semantics</b> — add a key to <code>pepernoten_prompts.yaml</code> and a corresponding <code>_cfg_get()</code> call in <code>src/prompts.py</code> with a hardcoded default.</li>
+      <li><b>New topic metric</b> — update the topic index schema and <code>notes.match_topics()</code>.</li>
+    </ul>
+  </main>
+</div>
+
+<footer>pepernoten is MIT-licensed. See <a href="../CONTRIBUTING.md">CONTRIBUTING.md</a> for the short version of this guide.</footer>

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+dist/
+
+# Obsidian vault state + personal content (the tool generates Research/ on first run)
+Welcome.md
+.obsidian
+Research/
+
+# macOS
+.DS*
+
+# Local-only tooling
+.claude/settings.local.json
+.bibtex_cache.json
+
+# Unrelated projects living in this folder — not part of pepernoten
+humaneval_results/
+pocket_tts_widget/
+claudeppy/
