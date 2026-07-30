@@ -107,6 +107,72 @@ uv run scripts/bibtex.py generate 2405.12345 --update_note
 uv run scripts/bibtex.py batch 2405.12345 2406.67890 --bib_file=refs.bib
 ```
 
+## MCP server
+
+`pepernoten_mcp.py` exposes the vault to MCP clients (Claude Code, Claude Desktop, …) over stdio, for **consulting** your notes: reading the note for a paper, reading a topic survey, or finding a result/method/claim across the vault. It is strictly read-only — parsing new papers stays in the CLI.
+
+Setup is two independent choices: **how to launch** the server, and **which backend** it reads from.
+
+### Launching
+
+```bash
+# from a local checkout of this repo
+uv run --directory /path/to/pepernoten pepernoten-mcp
+
+# via uvx, from a local path or straight from a git remote
+uvx --from /path/to/pepernoten pepernoten-mcp
+uvx --from git+https://github.com/you/pepernoten pepernoten-mcp
+```
+
+pepernoten is not on PyPI, so `uvx` always needs `--from`. To sanity-check a command, run it by hand — it prints `pepernoten-mcp: serving … (read-only)` to stderr on startup.
+
+### Choosing the backend
+
+| Variable | Meaning |
+|---|---|
+| `PEPERNOTEN_VAULT` | **(i) Local Obsidian vault** — vault root containing `Research/` (default: the pepernoten repo itself) |
+| `PEPERNOTEN_GITHUB_REPO` | **(ii) GitHub repo** — `owner/name`; presence of this switches to the GitHub backend |
+| `PEPERNOTEN_GITHUB_TOKEN` | Fine-grained PAT with read-only *Contents* access (private repos only) |
+| `PEPERNOTEN_GITHUB_BRANCH` | Branch to read (default: the repo's default branch) |
+| `PEPERNOTEN_GITHUB_ROOT` | Directory containing `*.md` notes in the repo (default `Research`) |
+
+### Putting it together (Claude Code)
+
+```bash
+# local checkout + local vault
+claude mcp add pepernoten \
+  --env PEPERNOTEN_VAULT=/path/to/vault \
+  -- uv run --directory /path/to/pepernoten pepernoten-mcp
+
+# uvx + GitHub-backed notes (private repo)
+claude mcp add pepernoten \
+  --env PEPERNOTEN_GITHUB_REPO=you/my-notes \
+  --env PEPERNOTEN_GITHUB_TOKEN=github_pat_... \
+  -- uvx --from git+https://github.com/you/pepernoten pepernoten-mcp
+```
+
+Equivalent `.mcp.json` / Claude Desktop `claude_desktop_config.json` entry:
+
+```json
+{
+  "mcpServers": {
+    "pepernoten": {
+      "command": "uvx",
+      "args": ["--from", "/path/to/pepernoten", "pepernoten-mcp"],
+      "env": { "PEPERNOTEN_VAULT": "/path/to/vault" }
+    }
+  }
+}
+```
+
+**Tools** (all read-only): `vault_info`, `list_papers`, `read_note` (by arXiv ID, filename, or partial title), `search_notes` (full-text + tag filter), `list_tags`, `list_topics`, `read_topic`.
+
+**Safety model**:
+- The server cannot modify anything — no parse, no write, no delete tools exist.
+- All reads are confined to `Research/` — absolute paths, `..`, and symlink escapes are rejected, and only `.md` notes (plus the three index JSONs, internally) are readable.
+- The GitHub backend talks exclusively to `api.github.com` (repo/branch names validated, 30 s timeouts, 2 MB file cap) and the token is sent only in request headers — it never appears in URLs, errors, or logs.
+- Retrieved note content is wrapped in an "untrusted data" banner so a client LLM is less likely to follow instructions embedded in a note (prompt-injection hardening — the client still decides).
+
 ## Note structure
 
 Each parsed paper produces a `.md` note in `Research/` with:

@@ -125,6 +125,7 @@
       <li><a href="#pipeline">Parsing pipeline</a></li>
       <li><a href="#data">Key data structures</a></li>
       <li><a href="#prompts">Prompt configuration</a></li>
+      <li><a href="#mcp">MCP server</a></li>
     </ul>
     <div class="section-label">Contributing</div>
     <ul>
@@ -165,11 +166,13 @@ uv run pytest</code></pre>
     <h2 id="layout">Repository layout</h2>
     <pre><code>pepernoten/
 ├── pepernoten_cli.py       REPL entry point (questionary + rich UI)
+├── pepernoten_mcp.py       MCP server entry point (stdio, read-only tool layer)
 ├── pepernoten_prompts.yaml user-configurable prompt semantics
 ├── pyproject.toml          dependencies, entry point, ruff + pyright config
 │
 ├── src/                    LIBRARY — pure modules, no fire.Fire, no __main__
 │   ├── vault.py              path constants, index I/O, tag index, topic file I/O
+│   ├── mcp_backend.py        MCP note-store backends (local vault / GitHub, read-only)
 │   ├── llm.py                OpenRouter client + call() / call_json()
 │   ├── arxiv_utils.py        rate limiter, HTML fetch, ID extraction, Scholar Inbox
 │   ├── notes.py              note parsing, topic matching, backlinks, related-work extraction
@@ -191,6 +194,8 @@ uv run pytest</code></pre>
     ├── vault, arxiv_utils
     ├── scripts/parse   ──► paper ──► vault, llm, arxiv_utils, notes, figures, prompts, bibtex
     └── src/bibtex
+
+pepernoten_mcp ──► mcp_backend  (nothing else — the MCP layer never touches the pipeline)
 
 scripts/parse         ──► paper, vault, notes, arxiv_utils
 scripts/topic_manager ──► llm, vault, notes, prompts
@@ -257,10 +262,49 @@ slug: streaming-video-llms
     <h2 id="prompts">Prompt configuration</h2>
     <p>All user-facing prompt semantics (roles, tones) live in <code>pepernoten_prompts.yaml</code>. Code in <code>src/prompts.py</code> loads it via <code>_cfg_get(dot.path, default)</code> — missing keys fall back to hardcoded defaults silently. Only <em>semantics</em> are configurable; JSON output format, field specs, and retry logic are not.</p>
 
+    <h2 id="mcp">MCP server</h2>
+    <p>A read-only consultation layer over the vault for MCP clients (Claude Code, Claude Desktop, …), served over stdio. The tool layer (<code>pepernoten_mcp.py</code>) is thin; all logic lives in <code>src/mcp_backend.py</code>.</p>
+
+    <h3>Architecture</h3>
+    <ul>
+      <li><code>LocalBackend</code> / <code>GitHubBackend</code> share one read-only interface — <code>list_markdown()</code>, <code>read_text(relpath)</code>, and the three index accessors. Relpaths are relative to <code>Research/</code> (or <code>$PEPERNOTEN_GITHUB_ROOT</code>).</li>
+      <li><code>backend_from_env()</code> picks the backend: <code>PEPERNOTEN_GITHUB_REPO</code> set → GitHub, else <code>PEPERNOTEN_VAULT</code> (default: this repo).</li>
+      <li>The GitHub backend lists files via the Git Trees API (cached 60&thinsp;s) and fetches content via the Blobs API (cached by immutable sha), so searches don't hammer the rate limit.</li>
+      <li>Tools (all annotated read-only): <code>vault_info</code>, <code>list_papers</code>, <code>read_note</code>, <code>search_notes</code>, <code>list_tags</code>, <code>list_topics</code>, <code>read_topic</code>.</li>
+    </ul>
+
+    <h3>Safety invariants</h3>
+    <p>Enforced in <code>_check_relpath</code> / <code>LocalBackend._resolve</code> / <code>GitHubBackend._get</code>, covered by <code>tests/test_mcp_backend.py</code>. Do not weaken these:</p>
+    <ul>
+      <li>The server exposes no mutating tools at all — no parse, no write, no delete.</li>
+      <li>No path may escape the notes tree: <code>..</code>, absolute paths, <code>~</code>, and symlink escapes are all rejected; only <code>.md</code> notes plus the three known index JSONs are readable.</li>
+      <li>GitHub requests go to <code>api.github.com</code> only, with validated repo/branch names, 30&thinsp;s timeouts, and a 2&thinsp;MB file cap; the token lives in request headers only and never appears in URLs or error messages.</li>
+      <li>Retrieved note content is wrapped in an "untrusted data" banner (prompt-injection hardening for the client LLM).</li>
+    </ul>
+    <p><span class="pill">stdout</span> Keep stdout clean in server code — it carries the JSON-RPC stream. Diagnostics go to stderr.</p>
+
+    <h3>Running it</h3>
+    <pre><code># from a local checkout
+uv run --directory /path/to/pepernoten pepernoten-mcp
+
+# via uvx, from a local path or a git remote (needs --from; not on PyPI)
+uvx --from /path/to/pepernoten pepernoten-mcp
+uvx --from git+https://github.com/you/pepernoten pepernoten-mcp</code></pre>
+    <table>
+      <tr><th>Variable</th><th>Meaning</th></tr>
+      <tr><td><code>PEPERNOTEN_VAULT</code></td><td>Local vault root containing <code>Research/</code> (default: this repo)</td></tr>
+      <tr><td><code>PEPERNOTEN_GITHUB_REPO</code></td><td><code>owner/name</code> — presence switches to the GitHub backend</td></tr>
+      <tr><td><code>PEPERNOTEN_GITHUB_TOKEN</code></td><td>Fine-grained PAT, read-only <em>Contents</em> access (private repos only)</td></tr>
+      <tr><td><code>PEPERNOTEN_GITHUB_BRANCH</code></td><td>Branch to read (default: the repo's default branch)</td></tr>
+      <tr><td><code>PEPERNOTEN_GITHUB_ROOT</code></td><td>Directory containing the notes (default <code>Research</code>)</td></tr>
+    </table>
+    <p>Client-side registration examples (<code>claude mcp add</code>, <code>.mcp.json</code>) are in the <a href="../README.md">README</a>. The server prints <code>pepernoten-mcp: serving … (read-only)</code> to stderr on startup — handy for sanity-checking a config by hand.</p>
+
     <h2 id="responsibilities">Module responsibilities</h2>
     <table>
       <tr><th>Module</th><th>Owns</th><th>Does not own</th></tr>
       <tr><td><code>src/vault.py</code></td><td>All path constants, index read/write, topic file I/O</td><td>LLM calls, network I/O</td></tr>
+      <tr><td><code>src/mcp_backend.py</code></td><td>Read-only note-store backends (local / GitHub), path confinement, search</td><td>MCP protocol, pipeline code</td></tr>
       <tr><td><code>src/llm.py</code></td><td>OpenRouter client, <code>call()</code> / <code>call_json()</code></td><td>Prompt text, retry logic beyond basic</td></tr>
       <tr><td><code>src/arxiv_utils.py</code></td><td>Rate limiters, arXiv HTML fetch, ID extraction, Scholar Inbox</td><td>Figure parsing, note writing</td></tr>
       <tr><td><code>src/notes.py</code></td><td>Note parsing, topic matching, backlinks, changelog</td><td>Index I/O, network</td></tr>
@@ -270,6 +314,7 @@ slug: streaming-video-llms
       <tr><td><code>src/bibtex.py</code></td><td>BibTeX lookup cascade + cache</td><td>Note UI, clipboard</td></tr>
       <tr><td><code>scripts/*.py</code></td><td><code>fire.Fire</code> CLI wrappers, batch orchestration</td><td>Business logic (lives in <code>src/</code>)</td></tr>
       <tr><td><code>pepernoten_cli.py</code></td><td>Interactive REPL, rich/questionary UI</td><td>All logic (delegates to <code>src/</code> and <code>scripts/</code>)</td></tr>
+      <tr><td><code>pepernoten_mcp.py</code></td><td>MCP tool definitions, untrusted-content banner</td><td>All logic (delegates to <code>src/mcp_backend.py</code>)</td></tr>
     </table>
 
     <h2 id="import-rules">Import rules</h2>

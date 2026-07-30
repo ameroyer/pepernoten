@@ -17,11 +17,13 @@
 ```
 pepernoten/
 ├── pepernoten_cli.py            REPL entry point (questionary + rich UI)
+├── pepernoten_mcp.py            MCP server entry point (stdio, read-only tool layer)
 ├── pepernoten_prompts.yaml      user-configurable prompt semantics
 ├── pyproject.toml               dependencies, entry point, ruff + pyright config
 │
 ├── src/                         LIBRARY — pure modules, no fire.Fire, no __main__
 │   ├── vault.py                 path constants, index I/O, tag index, topic file I/O
+│   ├── mcp_backend.py           MCP note-store backends (local vault / GitHub, read-only)
 │   ├── llm.py                   OpenRouter client + call() / call_json()
 │   ├── arxiv_utils.py           rate limiter, HTML fetch, ID extraction, Scholar Inbox
 │   ├── notes.py                 note parsing, topic matching, backlinks, related-work extraction
@@ -43,6 +45,8 @@ pepernoten_cli
     ├── vault, arxiv_utils
     ├── scripts/parse   ──► paper ──► vault, llm, arxiv_utils, notes, figures, prompts, bibtex
     └── src/bibtex
+
+pepernoten_mcp ──► mcp_backend          (nothing else — the MCP layer never touches the pipeline)
 
 scripts/parse         ──► paper, vault, notes, arxiv_utils
 scripts/topic_manager ──► llm, vault, notes, prompts
@@ -234,6 +238,18 @@ Two `_RateLimiter` instances, each with its own threading lock:
 | 2 | ML researcher (default) | 2 sentences | Standard depth |
 | 3 | Subfield newcomer | 2+1 sentences | Intuition for design choices |
 | 4 | ML newcomer | 3 sentences | Definitions, analogies, `concepts` section |
+
+---
+
+## MCP server — `pepernoten_mcp.py` + `src/mcp_backend.py`
+
+A read-only consultation layer over the vault. The tool layer (`pepernoten_mcp.py`) is thin; all logic lives in `src/mcp_backend.py`:
+
+- `LocalBackend` / `GitHubBackend` share one read-only interface: `list_markdown()`, `read_text(relpath)`, and the three index accessors. Relpaths are relative to `Research/` (or `$PEPERNOTEN_GITHUB_ROOT`).
+- `backend_from_env()` picks the backend: `PEPERNOTEN_GITHUB_REPO` set → GitHub, else `PEPERNOTEN_VAULT` (default: this repo).
+- **Safety invariants** (enforced in `_check_relpath` / `LocalBackend._resolve` / `GitHubBackend._get`, covered by `tests/test_mcp_backend.py`): the server exposes no mutating tools at all; no path may escape the notes tree (`..`, absolute, `~`, symlinks); only `.md` + the known index JSONs are readable; GitHub requests go to `api.github.com` only, with validated repo/branch names, timeouts, and a 2 MB size cap; the token never appears in URLs or error messages.
+- The GitHub backend lists files via the Git Trees API (cached 60 s) and fetches content via the Blobs API (cached by immutable sha), so searches don't hammer the rate limit.
+- Keep stdout clean in server code — it carries the JSON-RPC stream; diagnostics go to stderr.
 
 ---
 
