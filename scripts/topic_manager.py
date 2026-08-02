@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import llm
 from vault import (
     RESEARCH_PATH,
+    fm_field, frontmatter,
     load_paper_index, load_topic_index, save_topic_index,
     topic_path, write_topic_file, read_topic_content,
 )
@@ -27,7 +28,8 @@ from prompts import (
     _merge_system_prompt, _merge_user_prompt,
 )
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
+DEFAULT_MODEL     = "anthropic/claude-sonnet-4-5"    # writer model, for prose topic documents
+EXTRACTION_MODEL  = "anthropic/claude-haiku-4.5"      # small model, for JSON classification calls
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -253,14 +255,16 @@ def init(
     system = _init_system_prompt()
     user   = _init_user_prompt(topic_name, notes, cit_block)
     print(f"\nCalling {model}...")
-    content = llm.call(system, user, model, api_key)
+    tracker = llm.UsageTracker()
+    content = llm.call(system, user, model, api_key, tracker=tracker)
 
     bibliography = _build_jargon_table(pool)
     td["papers"]       = matched_ids
     td["last_updated"] = str(date.today())
     idx[slug] = td
     save_topic_index(idx)
-    write_topic_file(slug, topic_name, td, content, bibliography)
+    write_topic_file(slug, topic_name, td, content, bibliography,
+                      tokens_used=tracker.total_tokens(), cost_usd=tracker.total_cost())
     print(f"Written: {topic_path(slug)}")
 
 
@@ -345,7 +349,11 @@ def update(
         _pool     = _build_citation_pool(_topic_notes, _paper_index)
         _cit_blk  = _format_citation_block(_pool) if _pool else ""
 
-        raw = llm.call(_update_system_prompt(), _update_user_prompt(topic_name, existing, note, _cit_blk), model, api_key)
+        _tracker = llm.UsageTracker()
+        raw = llm.call(
+            _update_system_prompt(), _update_user_prompt(topic_name, existing, note, _cit_blk),
+            model, api_key, tracker=_tracker,
+        )
         document, changelog = parse_update_response(raw)
 
         if not changelog:
@@ -368,7 +376,8 @@ def update(
             idx[slug] = td
             save_topic_index(idx)
             _bib = _build_jargon_table(_pool)
-            write_topic_file(slug, topic_name, td, document, _bib)
+            write_topic_file(slug, topic_name, td, document, _bib,
+                              tokens_used=_tracker.total_tokens(), cost_usd=_tracker.total_cost())
             print(f"    ✓ Written: {topic_file}")
 
         changelog_entries.append({
@@ -388,6 +397,7 @@ def update(
 
 def discover(
     model: str = DEFAULT_MODEL,
+    extraction_model: str = EXTRACTION_MODEL,
     openrouter_api_key: str = "",
     min_papers: int = 2,
 ):
@@ -469,8 +479,8 @@ use 1 if the topic has a single defining tag, 2 if overlap is needed to avoid fa
 fingerprint_benchmarks: list benchmark names from the papers that are specific to this topic \
 (not generic ones like "ImageNet"). Empty list if none are distinctive."""
 
-    print(f"  Asking {model} to discover new topics...")
-    result = llm.call_json(system, user, model, api_key)
+    print(f"  Asking {extraction_model} to discover new topics...")
+    result = llm.call_json(system, user, extraction_model, api_key)
     new_topics = result.get("topics", [])
 
     if not new_topics:
@@ -515,21 +525,32 @@ fingerprint_benchmarks: list benchmark names from the papers that are specific t
 
         if notes_for_topic:
             print(f"    Generating topic file from {len(notes_for_topic)} paper(s)...")
-            _pidx   = load_paper_index()
-            _pool   = _build_citation_pool(notes_for_topic, _pidx)
-            _cblk   = _format_citation_block(_pool) if _pool else ""
-            content = llm.call(
-                _init_system_prompt(),
-                _init_user_prompt(name, notes_for_topic, _cblk),
-                model, api_key,
-            )
-            _bib    = _build_jargon_table(_pool)
-            matched_ids = [n["arxiv_id"] for n in notes_for_topic if n.get("arxiv_id")]
-            idx[slug]["papers"]       = matched_ids
-            idx[slug]["last_updated"] = today
-            save_topic_index(idx)
-            write_topic_file(slug, name, idx[slug], content, _bib)
-            print(f"    Written: {topic_path(slug)}")
+            try:
+                _pidx   = load_paper_index()
+                _pool   = _build_citation_pool(notes_for_topic, _pidx)
+                _cblk   = _format_citation_block(_pool) if _pool else ""
+                _tracker = llm.UsageTracker()
+                content = llm.call(
+                    _init_system_prompt(),
+                    _init_user_prompt(name, notes_for_topic, _cblk),
+                    model, api_key, tracker=_tracker,
+                )
+                _bib    = _build_jargon_table(_pool)
+                matched_ids = [n["arxiv_id"] for n in notes_for_topic if n.get("arxiv_id")]
+                idx[slug]["papers"]       = matched_ids
+                idx[slug]["last_updated"] = today
+                save_topic_index(idx)
+                write_topic_file(slug, name, idx[slug], content, _bib,
+                                  tokens_used=_tracker.total_tokens(), cost_usd=_tracker.total_cost())
+                print(f"    Written: {topic_path(slug)}")
+            except Exception as e:
+                # One topic's generation failing (e.g. a CLI timeout on a large survey) must not
+                # abort the rest of discovery. The slug stays registered with empty papers/
+                # last_updated so it's clearly pending; retry it alone with:
+                #   uv run scripts/topic_manager.py init {slug}
+                print(f"    ERROR generating '{name}': {e}")
+                print(f"    Left '{slug}' registered but unwritten, retry with: "
+                      f"uv run scripts/topic_manager.py init {slug}")
 
 
 def remove_from_topics(
@@ -563,12 +584,14 @@ def remove_from_topics(
 
         if existing:
             print(f"  [{slug}] Removing '{paper_title}' from '{topic_name}'...")
+            _tracker = llm.UsageTracker()
             content = llm.call(
                 _remove_system_prompt(),
                 _remove_user_prompt(topic_name, existing, paper_title, aid),
-                model, api_key,
+                model, api_key, tracker=_tracker,
             )
-            write_topic_file(slug, topic_name, td, content)
+            write_topic_file(slug, topic_name, td, content,
+                              tokens_used=_tracker.total_tokens(), cost_usd=_tracker.total_cost())
             print(f"    ✓ Updated: {topic_path(slug)}")
 
         td["papers"] = [p for p in td.get("papers", []) if p != aid]
@@ -579,7 +602,7 @@ def remove_from_topics(
 
 
 def find_merge_candidates(
-    model: str = DEFAULT_MODEL,
+    extraction_model: str = EXTRACTION_MODEL,
     openrouter_api_key: str = "",
 ) -> list:
     """Ask the LLM to propose topic merges. Returns a list of merge-group dicts.
@@ -606,8 +629,8 @@ def find_merge_candidates(
         for slug, td in idx.items()
     ]
 
-    print("  Asking LLM for merge candidates...")
-    result = llm.call_json(_merge_system_prompt(), _merge_user_prompt(topic_summaries), model, api_key)
+    print(f"  Asking {extraction_model} for merge candidates...")
+    result = llm.call_json(_merge_system_prompt(), _merge_user_prompt(topic_summaries), extraction_model, api_key)
     merges = result.get("merges", [])
 
     # Validate: keep only groups where all slugs exist and no slug is reused
@@ -674,7 +697,8 @@ def execute_merge(
     print(f"  Generating merged topic '{new_name}' from {len(notes)} paper(s)...")
     pool    = _build_citation_pool(notes, paper_index)
     cblk    = _format_citation_block(pool) if pool else ""
-    content = llm.call(_init_system_prompt(), _init_user_prompt(new_name, notes, cblk), model, api_key)
+    tracker = llm.UsageTracker()
+    content = llm.call(_init_system_prompt(), _init_user_prompt(new_name, notes, cblk), model, api_key, tracker=tracker)
     bib     = _build_jargon_table(pool)
 
     today = str(date.today())
@@ -691,7 +715,8 @@ def execute_merge(
     # Write new topic
     idx[new_slug] = new_td
     save_topic_index(idx)
-    write_topic_file(new_slug, new_name, new_td, content, bib)
+    write_topic_file(new_slug, new_name, new_td, content, bib,
+                      tokens_used=tracker.total_tokens(), cost_usd=tracker.total_cost())
     print(f"    ✓ Created: {topic_path(new_slug)}")
 
     # Remove old topics
@@ -707,14 +732,26 @@ def execute_merge(
 
 
 def backlink_topics():
-    """Re-write all topic files to add/refresh the ## Papers backlink section."""
+    """Re-write all topic files to add/refresh the ## Papers backlink section.
+
+    Preserves each file's existing tokens_used/est_cost_usd frontmatter (read back from disk)
+    since this is a structural refresh, not a regeneration — it shouldn't zero out the recorded
+    generation cost.
+    """
     idx = load_topic_index()
     updated = 0
     for slug, td in idx.items():
-        if not os.path.exists(topic_path(slug)):
+        path = topic_path(slug)
+        if not os.path.exists(path):
             continue
+        fm = frontmatter(Path(path).read_text(encoding="utf-8"))
+        tok_str  = fm_field(fm, "tokens_used")
+        cost_str = fm_field(fm, "est_cost_usd")
+        tokens_used = int(tok_str) if tok_str.isdigit() else 0
+        cost_usd = float(cost_str) if cost_str not in ("", "n/a") else None
         content = read_topic_content(slug)  # strips old papers section
-        write_topic_file(slug, td["name"], td, content)  # re-writes with fresh section
+        write_topic_file(slug, td["name"], td, content,
+                          tokens_used=tokens_used, cost_usd=cost_usd)  # re-writes with fresh section
         updated += 1
     print(f"Updated {updated} topic file(s) with paper backlinks.")
 

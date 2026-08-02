@@ -1,11 +1,16 @@
 # Note parsing, topic matching, backlink injection, and changelog utilities
 
 import re
+import threading
 from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 
 from vault import RESEARCH_PATH, fm_field, frontmatter
+
+# Concurrent parses can each try to backlink into the same third note at
+# once — serialize the whole scan-and-rewrite so writes can't interleave.
+_backlink_lock = threading.Lock()
 
 # Tags that identify structural meta-info, not research topics
 _NOT_BENCH = {
@@ -63,6 +68,32 @@ def parse_note(path: str) -> dict:
         limitations = lims,
         **sections,
     )
+
+
+def parse_sectioned_response(text: str) -> dict[str, str]:
+    """Split a Stage-2 writer response into {lowercase_section_name: content} using its
+    ===SECTION_NAME=== markers. Returns {} if no markers are found (signals a retry)."""
+    matches = re.finditer(r"===([A-Z_]+)===\s*\n?(.*?)(?=\n===[A-Z_]+===|\Z)", text, re.DOTALL)
+    return {m.group(1).lower(): m.group(2).strip() for m in matches}
+
+
+def extract_my_notes(text: str) -> str:
+    """Pull the free-text content out of an existing note's '> [!note] Thoughts' blockquote,
+    so reparse_all can preserve hand-written notes across regeneration. '' if empty/absent."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if "[!note] Thoughts" not in line:
+            continue
+        captured = []
+        for follow in lines[i + 1:]:
+            if not follow.startswith(">"):
+                break
+            content = follow[1:]
+            if content.startswith(" "):
+                content = content[1:]
+            captured.append(content)
+        return "\n".join(captured).strip()
+    return ""
 
 
 def note_xml(d: dict, index: int | None = None) -> str:
@@ -133,31 +164,32 @@ def find_note_for_paper(index: dict, paper_name: str) -> str | None:
 
 def inject_backlinks(note_stem: str, paper_title: str) -> list[str]:
     updated: list[str] = []
-    for md_file in Path(RESEARCH_PATH).glob("*.md"):
-        if md_file.stem == note_stem:
-            continue
-        content = md_file.read_text(encoding="utf-8")
-        if f"[[{note_stem}" in content:
-            continue
-        new_lines: list[str] = []
-        changed = False
-        for line in content.split("\n"):
-            if "|" in line:
-                parts = line.split("|")
-                if len(parts) >= 3:
-                    raw_cell = parts[1].strip()
-                    if raw_cell.startswith("[[") or raw_cell.startswith("["):
-                        new_lines.append(line)
-                        continue
-                    ratio = SequenceMatcher(None, raw_cell.lower(), paper_title.lower()).ratio()
-                    if ratio > 0.75 and raw_cell:
-                        parts[1] = f" [[{note_stem}\\|{raw_cell}]] "
-                        line = "|".join(parts)
-                        changed = True
-            new_lines.append(line)
-        if changed:
-            md_file.write_text("\n".join(new_lines), encoding="utf-8")
-            updated.append(md_file.name)
+    with _backlink_lock:
+        for md_file in Path(RESEARCH_PATH).glob("*.md"):
+            if md_file.stem == note_stem:
+                continue
+            content = md_file.read_text(encoding="utf-8")
+            if f"[[{note_stem}" in content:
+                continue
+            new_lines: list[str] = []
+            changed = False
+            for line in content.split("\n"):
+                if "|" in line:
+                    parts = line.split("|")
+                    if len(parts) >= 3:
+                        raw_cell = parts[1].strip()
+                        if raw_cell.startswith("[[") or raw_cell.startswith("["):
+                            new_lines.append(line)
+                            continue
+                        ratio = SequenceMatcher(None, raw_cell.lower(), paper_title.lower()).ratio()
+                        if ratio > 0.75 and raw_cell:
+                            parts[1] = f" [[{note_stem}\\|{raw_cell}]] "
+                            line = "|".join(parts)
+                            changed = True
+                new_lines.append(line)
+            if changed:
+                md_file.write_text("\n".join(new_lines), encoding="utf-8")
+                updated.append(md_file.name)
     return updated
 
 

@@ -370,7 +370,7 @@ def cmd_topics():
 # SCHOLAR INBOX COMMAND
 # ──────────────────────────────────────────────────────────────
 
-def cmd_inbox(api_key: str, model: str, safe_update: bool):
+def cmd_inbox(api_key: str, model: str, safe_update: bool, extraction_model: str):
     import parse as ap
     from arxiv_utils import fetch_digest, arxiv_id_from_paper, paper_score
 
@@ -418,34 +418,27 @@ def cmd_inbox(api_key: str, model: str, safe_update: bool):
         return
 
     console.print()
-    new_paths = []
-    for i, (aid, verbosity) in enumerate(selection, 1):
-        console.print(Rule(f"[{DIM}][{i}/{len(selection)}] {aid}[/{DIM}]", style="green"))
-        try:
-            path = ap.process_arxiv_paper(
-                f"https://arxiv.org/abs/{aid}",
-                model=model,
-                openrouter_api_key=api_key,
-                verbosity=verbosity,
-            )
-            if path:
-                new_paths.append(path)
-        except Exception as e:
-            console.print(f"[red]  Error: {e}[/red]")
+    console.print(f"[{DIM}]Processing {len(selection)} paper(s), up to {ap.DEFAULT_MAX_WORKERS} in parallel…[/{DIM}]\n")
+    items = [(f"{i}/{len(selection)}", aid, verbosity, "") for i, (aid, verbosity) in enumerate(selection, 1)]
+    ok, failed, new_paths = ap._process_batch(
+        items, model=model, extraction_model=extraction_model, vision_model=ap.VISION_MODEL, api_key=api_key,
+        max_workers=ap.DEFAULT_MAX_WORKERS,
+    )
 
     if new_paths:
         console.print()
         ap._batch_update_topics(new_paths, model=model, openrouter_api_key=api_key,
                                 safe_update=safe_update)
 
-    console.print(f"\n[{G}]Done — {len(new_paths)} paper(s) added.[/{G}]")
+    failed_str = f", {failed} failed" if failed else ""
+    console.print(f"\n[{G}]Done — {len(new_paths)} paper(s) added{failed_str}.[/{G}]")
 
 
 # ──────────────────────────────────────────────────────────────
 # PARSE COMMAND
 # ──────────────────────────────────────────────────────────────
 
-def cmd_parse(api_key: str, model: str, safe_update: bool):
+def cmd_parse(api_key: str, model: str, safe_update: bool, extraction_model: str):
     import parse as ap
     from arxiv_utils import extract_arxiv_id, fetch_titles
 
@@ -491,27 +484,20 @@ def cmd_parse(api_key: str, model: str, safe_update: bool):
         return
 
     console.print()
-    new_paths = []
-    for i, (aid, verbosity) in enumerate(selection, 1):
-        console.print(Rule(f"[{DIM}][{i}/{len(selection)}] {aid}[/{DIM}]", style="green"))
-        try:
-            path = ap.process_arxiv_paper(
-                f"https://arxiv.org/abs/{aid}",
-                model=model,
-                openrouter_api_key=api_key,
-                verbosity=verbosity,
-            )
-            if path:
-                new_paths.append(path)
-        except Exception as e:
-            console.print(f"[red]  Error: {e}[/red]")
+    console.print(f"[{DIM}]Processing {len(selection)} paper(s), up to {ap.DEFAULT_MAX_WORKERS} in parallel…[/{DIM}]\n")
+    items = [(f"{i}/{len(selection)}", aid, verbosity, "") for i, (aid, verbosity) in enumerate(selection, 1)]
+    ok, failed, new_paths = ap._process_batch(
+        items, model=model, extraction_model=extraction_model, vision_model=ap.VISION_MODEL, api_key=api_key,
+        max_workers=ap.DEFAULT_MAX_WORKERS,
+    )
 
     if new_paths:
         console.print()
         ap._batch_update_topics(new_paths, model=model, openrouter_api_key=api_key,
                                 safe_update=safe_update)
 
-    console.print(f"\n[{G}]Done — {len(new_paths)} paper(s) added.[/{G}]")
+    failed_str = f", {failed} failed" if failed else ""
+    console.print(f"\n[{G}]Done — {len(new_paths)} paper(s) added{failed_str}.[/{G}]")
 
 
 def cmd_list():
@@ -628,7 +614,7 @@ def cmd_list():
 # UPDATE KNOWLEDGE COMMAND
 # ──────────────────────────────────────────────────────────────
 
-def cmd_update_knowledge(api_key: str, model: str, safe_update: bool):
+def cmd_update_knowledge(api_key: str, model: str, safe_update: bool, extraction_model: str):
     """Mark papers to add (+) or remove (-) from topics, then run the LLM update."""
     import parse as ap
     import topic_manager as tm
@@ -803,7 +789,7 @@ def cmd_update_knowledge(api_key: str, model: str, safe_update: bool):
     console.print()
     console.print(Rule(f"[{DIM}]Checking for topic merge candidates…[/{DIM}]", style="dim"))
     try:
-        candidates = tm.find_merge_candidates(model=model, openrouter_api_key=api_key)
+        candidates = tm.find_merge_candidates(extraction_model=extraction_model, openrouter_api_key=api_key)
     except Exception as e:
         console.print(f"[{DIM}]  Merge check failed: {e}[/{DIM}]")
         return
@@ -901,8 +887,9 @@ def main():
         )
         sys.exit(1)
 
-    model       = os.environ.get("PEPERNOTEN_MODEL", "anthropic/claude-sonnet-4-5")
-    safe_update = "--safe" in sys.argv or "--safe_update" in sys.argv
+    model            = os.environ.get("PEPERNOTEN_MODEL", "anthropic/claude-sonnet-4-5")
+    extraction_model = os.environ.get("PEPERNOTEN_EXTRACTION_MODEL", "anthropic/claude-haiku-4.5")
+    safe_update      = "--safe" in sys.argv or "--safe_update" in sys.argv
 
     # Plain text titles — questionary doesn't interpret Rich markup
     cmd_choices = [
@@ -926,11 +913,11 @@ def main():
 
         console.print()
 
-        if   command == "parse":            cmd_parse(api_key, model, safe_update)
-        elif command == "inbox":            cmd_inbox(api_key, model, safe_update)
+        if   command == "parse":            cmd_parse(api_key, model, safe_update, extraction_model)
+        elif command == "inbox":            cmd_inbox(api_key, model, safe_update, extraction_model)
         elif command == "topics":           cmd_topics()
         elif command == "list":             cmd_list()
-        elif command == "update_knowledge": cmd_update_knowledge(api_key, model, safe_update)
+        elif command == "update_knowledge": cmd_update_knowledge(api_key, model, safe_update, extraction_model)
         elif command == "bibtex":           cmd_bibtex()
 
         console.print()

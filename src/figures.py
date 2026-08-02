@@ -11,6 +11,7 @@ import fitz
 import requests
 from bs4 import BeautifulSoup
 
+import llm
 from arxiv_utils import arxiv_asset
 from vault import IMAGES_PATH, THUMBNAIL_PATH, VAULT_PATH
 
@@ -270,7 +271,8 @@ def extract_figures_with_vision(
 
 
 def _describe_figure(
-    img_path: str, label: str, caption: str, client, model: str
+    img_path: str, label: str, caption: str, client, model: str,
+    tracker: llm.UsageTracker | None = None,
 ) -> str:
     ext = Path(img_path).suffix.lstrip(".").lower() or "png"
     mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "svg": "image/svg+xml"}.get(ext, "image/png")
@@ -291,6 +293,8 @@ def _describe_figure(
             ]}],
             max_tokens=120,
         )
+        if tracker is not None:
+            tracker.add(llm.usage_from_openai_response(resp, model))
         return resp.choices[0].message.content.strip()
     except Exception:
         return caption[:200]
@@ -301,6 +305,7 @@ def _pick_best_figure(
     caption_map: dict[str, str],
     client,
     vision_model: str,
+    tracker: llm.UsageTracker | None = None,
 ) -> str | None:
     candidates = [(lbl, path) for lbl, path in figure_map.items() if "Table" not in lbl][:6]
     if not candidates:
@@ -346,6 +351,8 @@ def _pick_best_figure(
             messages=[{"role": "user", "content": content}],
             max_tokens=10,
         )
+        if tracker is not None:
+            tracker.add(llm.usage_from_openai_response(resp, vision_model))
         m = re.search(r"\d+", resp.choices[0].message.content.strip())
         if m:
             idx = int(m.group())

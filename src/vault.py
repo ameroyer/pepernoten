@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import threading
 from pathlib import Path
 
 VAULT_PATH      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,6 +14,12 @@ TOPIC_INDEX     = os.path.join(TOPICS_PATH, ".topic_index.json")
 TAG_INDEX_PATH  = os.path.join(RESEARCH_PATH, ".tag_index.json")
 IMAGES_PATH     = os.path.join(RESEARCH_PATH, "images")
 THUMBNAIL_PATH  = os.path.join(RESEARCH_PATH, "Thumbnails")
+
+# Guards read-modify-write of the on-disk JSON indices — needed once papers
+# are parsed concurrently (see parse.py), so one thread's save can't clobber
+# another's in-flight update.
+_index_lock = threading.Lock()
+_tag_lock   = threading.Lock()
 
 
 def load_paper_index() -> dict:
@@ -25,6 +32,14 @@ def load_paper_index() -> dict:
 def save_paper_index(index: dict):
     with open(INDEX_PATH, "w") as f:
         json.dump(index, f, indent=2)
+
+
+def add_paper_to_index(arxiv_id: str, info: dict):
+    """Atomically merge one paper's entry into the index (safe across threads)."""
+    with _index_lock:
+        index = load_paper_index()
+        index[arxiv_id] = info
+        save_paper_index(index)
 
 
 def load_topic_index() -> dict:
@@ -103,6 +118,19 @@ def delete_paper(aid: str) -> bool:
     return True
 
 
+def cost_footer(tokens: int, cost: float | None) -> str:
+    """Small dim footer line reporting how much a note/topic generation cost.
+    '' if no tokens were tracked (e.g. tracking wasn't wired up for that call site)."""
+    if not tokens:
+        return ""
+    price = f" (~${cost:.3f})" if cost is not None else ""
+    return (
+        '<div style="margin-top:1.5em;font-size:0.75em;opacity:0.4;">'
+        f"Generated using {tokens:,} tokens{price}"
+        "</div>"
+    )
+
+
 def short_authors(authors: str) -> str:
     parts = [a.strip() for a in authors.split(",")]
     return ", ".join(parts[:2]) + (" et al." if len(parts) > 2 else "")
@@ -135,13 +163,14 @@ def save_tag_index(tags: list[str]):
 
 
 def update_tag_index(new_tags: list[str]) -> list[str]:
-    current = load_tag_index()
-    current_set = set(current)
-    added = [t for t in new_tags if t not in current_set and t not in _META_TAGS]
-    if added:
-        save_tag_index(current + added)
-        print(f"  New tags added to index: {added}")
-    return added
+    with _tag_lock:
+        current = load_tag_index()
+        current_set = set(current)
+        added = [t for t in new_tags if t not in current_set and t not in _META_TAGS]
+        if added:
+            save_tag_index(current + added)
+            print(f"  New tags added to index: {added}")
+        return added
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -152,11 +181,15 @@ def topic_path(slug: str) -> str:
     return os.path.join(TOPICS_PATH, f"{slug}.md")
 
 
-def write_topic_file(slug: str, topic_name: str, td: dict, content: str, bibliography: str = ""):
+def write_topic_file(
+    slug: str, topic_name: str, td: dict, content: str, bibliography: str = "",
+    tokens_used: int = 0, cost_usd: float | None = None,
+):
     os.makedirs(TOPICS_PATH, exist_ok=True)
     papers_list = "\n".join(f"  - {p}" for p in td.get("papers", []))
     tags_list   = "\n".join(f"  - {t}" for t in td["fingerprint_tags"])
     bench_list  = "\n".join(f"  - {b}" for b in td.get("fingerprint_benchmarks", []))
+    cost_field  = f"{cost_usd:.4f}" if cost_usd is not None else "n/a"
     frontmatter = (
         f"---\n"
         f'topic: "{topic_name}"\n'
@@ -167,6 +200,8 @@ def write_topic_file(slug: str, topic_name: str, td: dict, content: str, bibliog
         f"paper_count: {len(td.get('papers', []))}\n"
         f"papers:\n{papers_list}\n"
         f"last_updated: \"{td.get('last_updated', '')}\"\n"
+        f"tokens_used: {tokens_used}\n"
+        f"est_cost_usd: \"{cost_field}\"\n"
         f"---\n\n"
     )
     refs_section = (
@@ -187,8 +222,10 @@ def write_topic_file(slug: str, topic_name: str, td: dict, content: str, bibliog
         papers_section = "\n\n---\n\n## Papers\n\n" + "\n".join(links)
     else:
         papers_section = ""
+    footer_html = cost_footer(tokens_used, cost_usd)
+    footer = f"\n\n{footer_html}" if footer_html else ""
     Path(topic_path(slug)).write_text(
-        frontmatter + content + refs_section + papers_section, encoding="utf-8"
+        frontmatter + content + refs_section + papers_section + footer, encoding="utf-8"
     )
 
 

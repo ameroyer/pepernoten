@@ -1,4 +1,8 @@
 # Core paper processing: fetch arXiv metadata, extract figures, synthesise with LLM, write note
+#
+# Synthesis is two-stage: a small/fast model (extraction_model) extracts bounded factual data
+# as JSON, then the configured writer model (model) writes the human-readable prose sections
+# from those facts plus the original paper text as a grounding reference.
 
 import os
 import re
@@ -18,32 +22,64 @@ from figures import (
     extract_figures_with_vision,
     extract_leading_figure,
 )
-from notes import find_note_for_paper, inject_backlinks
-from prompts import _build_system_prompt, _build_user_message
+from notes import find_note_for_paper, inject_backlinks, parse_sectioned_response
+from prompts import (
+    _extraction_system_prompt,
+    _extraction_user_message,
+    _writer_system_prompt,
+    _writer_user_message,
+)
 from vault import (
     RESEARCH_PATH,
     VAULT_PATH,
+    add_paper_to_index,
+    cost_footer,
     load_paper_index,
     load_tag_index,
-    save_paper_index,
     update_tag_index,
 )
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
-VISION_MODEL  = "google/gemini-2.5-flash-lite"
+DEFAULT_MODEL     = "anthropic/claude-sonnet-4-5"     # writer stage (prose)
+EXTRACTION_MODEL  = "anthropic/claude-haiku-4.5"       # extraction stage (bounded JSON facts)
+VISION_MODEL      = "google/gemini-2.5-flash-lite"
+
+
+def _bullet_list(section_text: str) -> list[str]:
+    """Parse a writer-stage '- bullet' section into a plain list of strings."""
+    items = []
+    for ln in section_text.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        if ln.startswith("- "):
+            ln = ln[2:].strip()
+        elif ln.startswith("-"):
+            ln = ln[1:].strip()
+        if ln:
+            items.append(ln)
+    return items
+
+
+def _thoughts_blockquote(preserved_thoughts: str) -> str:
+    if not preserved_thoughts:
+        return ">"
+    return "\n".join(f"> {ln}" if ln else ">" for ln in preserved_thoughts.splitlines())
 
 
 def process_arxiv_paper(
     arxiv_url: str,
     model: str = DEFAULT_MODEL,
+    extraction_model: str = EXTRACTION_MODEL,
     vision_model: str = VISION_MODEL,
     openrouter_api_key: str = "",
     verbosity: int = 2,
+    preserved_thoughts: str = "",
 ) -> str | None:
     api_key = openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         raise ValueError("No API key: pass --openrouter_api_key or set $OPENROUTER_API_KEY")
     client = llm.make_client(api_key)
+    tracker = llm.UsageTracker()
 
     arxiv_id = extract_arxiv_id(arxiv_url)
     print(f"Fetching metadata for {arxiv_id}...")
@@ -136,7 +172,7 @@ def process_arxiv_paper(
         best_banner = None
         if vision_model and figure_map:
             print("Selecting best banner figure...")
-            best_banner = _pick_best_figure(figure_map, caption_map, client, vision_model)
+            best_banner = _pick_best_figure(figure_map, caption_map, client, vision_model, tracker=tracker)
             if best_banner:
                 print(f"  Banner: {best_banner}")
         thumbnail_name = extract_leading_figure(doc, arxiv_id, figure_map, preferred_label=best_banner)
@@ -155,7 +191,7 @@ def process_arxiv_paper(
                 full_path = os.path.join(VAULT_PATH, path)
                 if os.path.exists(full_path):
                     figure_descriptions[lbl] = _describe_figure(
-                        full_path, lbl, caption_map.get(lbl, ""), client, vision_model
+                        full_path, lbl, caption_map.get(lbl, ""), client, vision_model, tracker=tracker
                     )
         for lbl in figure_map:
             figure_descriptions.setdefault(lbl, caption_map.get(lbl, ""))
@@ -165,33 +201,43 @@ def process_arxiv_paper(
     else:
         figures_context = ""
 
-    print(f"Asking {model} to synthesize the paper (verbosity={verbosity})...")
+    print(f"Extracting facts with {extraction_model}...")
     existing_tags = load_tag_index()
     tags_context = (
         "\n\n<existing_tags>\n" + ", ".join(existing_tags) + "\n</existing_tags>"
         if existing_tags else ""
     )
-    system_prompt = _build_system_prompt(verbosity, tags_context)
-    user_message  = _build_user_message(figures_context, text_source, full_text)
+    extraction_system = _extraction_system_prompt(tags_context)
+    extraction_user = _extraction_user_message(figures_context, text_source, full_text)
+    facts = llm.call_json(extraction_system, extraction_user, extraction_model, api_key, tracker=tracker)
+    if not isinstance(facts, dict):
+        raise ValueError(f"Extraction model returned a JSON {type(facts).__name__}, expected an object")
 
-    ai_data = llm.call_json(system_prompt, user_message, model, api_key)
-    if not isinstance(ai_data, dict):
-        raise ValueError(f"Model returned a JSON {type(ai_data).__name__}, expected an object")
-    tldr_summary = ai_data.get("tldr", "").replace('"', "'")
+    print(f"Writing note with {model} (verbosity={verbosity})...")
+    writer_system = _writer_system_prompt(verbosity)
+    writer_user = _writer_user_message(facts, figures_context, text_source, full_text)
+    raw_sections = llm.call(
+        writer_system, writer_user, model, api_key, tracker=tracker,
+        validate=lambda t: bool(parse_sectioned_response(t)),
+        retry_hint="Return your response using the exact ===SECTION_NAME=== markers as instructed, nothing else.",
+    )
+    sections = parse_sectioned_response(raw_sections)
+
+    tldr_summary = sections.get("tldr", "").replace('"', "'")
 
     tags_list = []
-    ai_tags = ai_data.get("tags", [])
+    ai_tags = facts.get("tags", [])
     if isinstance(ai_tags, list):
         normalised = [str(t).strip().replace(" ", "-").lower() for t in ai_tags]
         tags_list.extend(normalised)
         update_tag_index(normalised)
     tags_yaml = "\n".join(f"  - {t}" for t in tags_list)
 
-    gaps = ai_data.get("gaps", [])
+    gaps = _bullet_list(sections.get("gaps", ""))
     gaps_md = "\n".join(f"> - {g}" for g in gaps) if gaps else "> - None identified"
-    limitations = ai_data.get("limitations", [])
+    limitations = _bullet_list(sections.get("limitations", ""))
     limitations_md = "\n".join(f"> - {l}" for l in limitations) if limitations else "> - None identified"
-    oddities = ai_data.get("oddities", [])
+    oddities = _bullet_list(sections.get("oddities", ""))
     oddities_md = "\n".join(f"> - {o}" for o in oddities) if oddities else ""
     oddities_section_md = (
         f"\n> [!question] Minor Flaws & Confusions\n{oddities_md}" if oddities_md else ""
@@ -225,7 +271,7 @@ def process_arxiv_paper(
                 blocks.append(f"*{lbl}: {cap}*")
         return ("\n\n" + "\n\n".join(blocks) + "\n") if blocks else ""
 
-    related_work = ai_data.get("related_work", [])
+    related_work = facts.get("related_work", [])
     if related_work and isinstance(related_work[0], dict):
         missing_ids = [
             r for r in related_work
@@ -267,35 +313,19 @@ def process_arxiv_paper(
     else:
         related_md = "*No related work extracted.*"
 
-    def _prose(value) -> str:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, dict):
-            return "\n\n".join(
-                str(v) if not isinstance(v, list) else "\n".join(f"- {i}" for i in v)
-                for v in value.values() if v
-            )
-        if isinstance(value, list):
-            return "\n".join(f"- {i}" for i in value)
-        return str(value) if value else ""
-
-    ablation_text = _prose(ai_data.get("ablation", ""))
-
     concepts_md = ""
     if verbosity == 4:
-        concepts = ai_data.get("concepts", [])
-        if isinstance(concepts, list):
-            blocks = []
-            for c in concepts:
-                if isinstance(c, dict):
-                    term = c.get("term", "").strip()
-                    defn = c.get("definition", "").strip()
-                    if term and defn:
-                        blocks.append(f"> [!info] {term}\n> {defn}")
-            if blocks:
-                concepts_md = "\n\n".join(blocks) + "\n"
+        concepts_section = sections.get("concepts", "")
+        blocks = []
+        for line in concepts_section.splitlines():
+            m = re.match(r"\*\*(.+?)\*\*:\s*(.+)", line.strip())
+            if m:
+                term, defn = m.group(1).strip(), m.group(2).strip()
+                blocks.append(f"> [!info] {term}\n> {defn}")
+        if blocks:
+            concepts_md = "\n\n".join(blocks) + "\n"
 
-    rt = ai_data.get("results_table", {})
+    rt = facts.get("results_table", {})
     headers = rt.get("headers", []) if isinstance(rt, dict) else []
     rows_data = rt.get("rows", []) if isinstance(rt, dict) else []
     if headers and rows_data:
@@ -303,7 +333,7 @@ def process_arxiv_paper(
         results_table_md = (
             "\n| " + " | ".join(headers) + " |\n"
             + sep + "\n"
-            + "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows_data)
+            + "\n".join("| " + " | ".join(str(c) for c in row) for row in rows_data)
         )
     else:
         results_table_md = ""
@@ -316,6 +346,12 @@ def process_arxiv_paper(
         '90deg,transparent,var(--interactive-accent),transparent);'
         'margin:2.5em 0;opacity:0.35"></div>'
     )
+
+    tokens_used = tracker.total_tokens()
+    cost_usd = tracker.total_cost()
+    cost_field = f"{cost_usd:.4f}" if cost_usd is not None else "n/a"
+    footer_html = cost_footer(tokens_used, cost_usd)
+    thoughts_block = _thoughts_blockquote(preserved_thoughts)
 
     markdown_content = f"""---
 title: "{title}"
@@ -332,6 +368,8 @@ banner: "{thumbnail_name}"
 banner_y: 0.4
 summary: "{tldr_summary}"
 verbosity: {verbosity}
+tokens_used: {tokens_used}
+est_cost_usd: "{cost_field}"
 ---
 
 # {title}
@@ -344,7 +382,7 @@ verbosity: {verbosity}
 ## :LiFeather: My Notes
 
 > [!note] Thoughts
->
+{thoughts_block}
 
 {hr}
 
@@ -362,20 +400,20 @@ verbosity: {verbosity}
 ## :LiBookOpen: Paper Summary
 
 ### Problem
-{_prose(ai_data.get('problem', ''))}
+{sections.get('problem', '')}
 {figs_at('problem')}
 
 ### Methodology
-{concepts_md}{_prose(ai_data.get('methodology', ''))}
+{concepts_md}{sections.get('methodology', '')}
 {figs_at('methodology')}
 
 ### Results
-{_prose(ai_data.get('results', ''))}
+{sections.get('results', '')}
 {results_table_md}
 {figs_at('results')}
 
 ### Ablation
-{ablation_text}
+{sections.get('ablation', '')}
 {figs_at('ablation')}
 
 {hr}
@@ -392,6 +430,7 @@ verbosity: {verbosity}
 {bibtex_entry}
 ```
 
+{footer_html}
 """
 
     with open(note_path, "w", encoding="utf-8") as f:
@@ -407,8 +446,7 @@ verbosity: {verbosity}
     if removed:
         print(f"Removed {removed} unused figure(s).")
 
-    index[arxiv_id] = {"title": title, "file": os.path.basename(note_path)}
-    save_paper_index(index)
+    add_paper_to_index(arxiv_id, {"title": title, "file": os.path.basename(note_path)})
 
     note_stem = os.path.splitext(os.path.basename(note_path))[0]
     backlinked = inject_backlinks(note_stem, title)
