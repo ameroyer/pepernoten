@@ -183,7 +183,7 @@ uv run pytest</code></pre>
 │
 ├── scripts/                CLI WRAPPERS — thin fire.Fire entry points
 │   ├── parse.py               parse / parse_many / sync / backlink_all
-│   ├── topic_manager.py       create / init / init_all / update / discover / list / backlink_topics
+│   ├── topic_manager.py       create / add / init / init_all / update / discover / list / backlink_topics
 │   └── bibtex.py              generate / batch / clear_cache
 │
 └── tests/                  pure-logic unit tests (no network, no LLM calls)</code></pre>
@@ -239,6 +239,7 @@ src/bibtex   ──► vault</div>
   }
 }</code></pre>
     <p>A paper matches a topic if it shares ≥ <code>min_tag_overlap</code> tags from <code>fingerprint_tags</code>, OR any <code>fingerprint_benchmarks</code> — see <code>notes.match_topics</code>.</p>
+    <p>Two ways to create a topic entry: <code>create</code> + <code>init</code> registers fingerprint tags by hand, then generates the file from whatever already matches them. <code>add</code> skips the manual tags. It hands the whole vault to <code>extraction_model</code> alongside a written description, asks it to pick the papers that genuinely belong and infer the fingerprint, then generates the file the same way <code>init</code> does.</p>
 
     <h3>Topic file structure</h3>
     <pre><code>---                     ← YAML frontmatter (topic metadata)

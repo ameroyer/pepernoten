@@ -53,6 +53,7 @@ COMMANDS = [
     ("topics",           "detailed list of topics and their papers"),
     ("list",             "browse all papers; delete with [d]"),
     ("update_knowledge", "update topic files — add or remove papers from topics"),
+    ("add_topic",        "describe a topic — Claude finds matching papers and writes it"),
     ("bibtex",           "generate BibTeX for a paper (checks if published)"),
     ("quit",             "exit"),
 ]
@@ -828,6 +829,36 @@ def cmd_update_knowledge(api_key: str, model: str, safe_update: bool, extraction
     console.print(f"\n[{G}]Merge complete.[/{G}]")
 
 
+# ──────────────────────────────────────────────────────────────
+# ADD TOPIC COMMAND
+# ──────────────────────────────────────────────────────────────
+
+def cmd_add_topic(api_key: str, model: str, extraction_model: str):
+    """Describe a topic in a sentence; Claude selects matching papers from the vault
+    and writes the survey directly, no manual tags needed."""
+    import topic_manager as tm
+
+    if not load_paper_index():
+        console.print(f"[{DIM}]No papers in vault.[/{DIM}]")
+        return
+
+    prompt = questionary.text(
+        "Describe the topic (Claude will find matching papers):",
+        style=Q_STYLE,
+    ).ask()
+
+    if not prompt or not prompt.strip():
+        console.print(f"[{DIM}]Nothing entered.[/{DIM}]")
+        return
+
+    console.print()
+    try:
+        tm.add(prompt.strip(), model=model, extraction_model=extraction_model,
+               openrouter_api_key=api_key)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
 def cmd_bibtex():
     import bibtex as bib
 
@@ -918,6 +949,7 @@ def main():
         elif command == "topics":           cmd_topics()
         elif command == "list":             cmd_list()
         elif command == "update_knowledge": cmd_update_knowledge(api_key, model, safe_update, extraction_model)
+        elif command == "add_topic":        cmd_add_topic(api_key, model, extraction_model)
         elif command == "bibtex":           cmd_bibtex()
 
         console.print()

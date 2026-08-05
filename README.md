@@ -52,6 +52,7 @@ uv run pepernoten_cli.py
 | **topics** | Lists all registered topics with paper counts and last-updated date. |
 | **list** | Browse all papers in the vault; press `d` to delete one. |
 | **update_knowledge** | Add or remove papers from topic files; propose and execute topic merges. |
+| **add_topic** | Describe a topic in a sentence. Claude searches the whole vault, picks the papers that belong, and writes the survey. |
 | **bibtex** | Generate BibTeX for a paper — checks PWC, CrossRef, Semantic Scholar, DBLP before falling back to `@misc`. |
 | **quit** | Exit. |
 
@@ -96,6 +97,7 @@ uv run scripts/parse.py sync                   # Scholar Inbox top-N
 # Topics
 uv run scripts/topic_manager.py list
 uv run scripts/topic_manager.py create "My Topic" --tags a,b --benchmarks B1
+uv run scripts/topic_manager.py add "efficient video tokenization for streaming models"
 uv run scripts/topic_manager.py init <slug>
 uv run scripts/topic_manager.py init_all
 uv run scripts/topic_manager.py update Research/SomePaper.md
@@ -188,7 +190,8 @@ Each parsed paper produces a `.md` note in `Research/` with:
 
 Topic files live in `Research/Topics/` and are maintained automatically:
 
-- **Auto-matched** — a paper joins a topic if its tags or benchmarks overlap the topic's fingerprint
+- **Created from a prompt**: `add_topic` takes a one-line description, searches the vault, and writes the survey from whatever papers actually fit
+- **Auto-matched**: once a topic exists, new papers join it if their tags or benchmarks overlap its fingerprint
 - **Living surveys** — Introduction, Benchmarks, Methods & Baselines table, Techniques & Tricks, Architecture Overview, Open Problems & Gaps
 - **Method Index** — appended automatically; maps every method short name → full title → link (covers cited baselines even without an arXiv ID)
 - **Paper backlinks** — `## Papers` section lists all vault papers as Obsidian wikilinks

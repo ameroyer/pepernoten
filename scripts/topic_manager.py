@@ -4,6 +4,7 @@
 #   uv run scripts/topic_manager.py update Research/SomePaper.md
 #   uv run scripts/topic_manager.py list
 #   uv run scripts/topic_manager.py create "My Topic" --tags a,b --benchmarks B1,B2
+#   uv run scripts/topic_manager.py add "efficient video tokenization for streaming models"
 
 import os
 import re
@@ -209,6 +210,123 @@ def create(
     }
     save_topic_index(idx)
     print(f"Created topic '{name}' (slug: {slug}). Run: uv run topic_manager.py init {slug}")
+
+
+def add(
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    extraction_model: str = EXTRACTION_MODEL,
+    openrouter_api_key: str = "",
+):
+    """Create a new topic from a written description — an LLM selects matching papers
+    from across the whole vault and writes the survey directly, no manual tags needed.
+
+    Example:
+        uv run scripts/topic_manager.py add "efficient video tokenization for streaming models"
+    """
+    api_key = openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise ValueError("No API key: pass --openrouter_api_key or set $OPENROUTER_API_KEY")
+
+    notes = [
+        note for md in sorted(Path(RESEARCH_PATH).glob("*.md"))
+        if (note := parse_note(str(md)))["title"]
+    ]
+    if not notes:
+        print("Vault is empty — nothing to search.")
+        return
+
+    idx = load_topic_index()
+    existing_desc = "\n".join(
+        f'  - "{td["name"]}": tags={td["fingerprint_tags"]}' for td in idx.values()
+    ) or "  (none yet)"
+
+    papers_summary = "\n\n".join(
+        f'<paper title="{n["title"]}" arxiv_id="{n["arxiv_id"]}">\n'
+        f'<tldr>{n.get("tldr", "")}</tldr>\n'
+        f'<tags>{", ".join(n["tags"])}</tags>\n'
+        f'<benchmarks>{", ".join(n["benchmarks"])}</benchmarks>\n'
+        f'</paper>'
+        for n in notes
+    )
+
+    system = (
+        "You are organizing a personal research vault into topic files. "
+        "Given a topic description, select every paper in the vault that genuinely "
+        "belongs in it — be inclusive of relevant papers, but do not force a fit. "
+        "Output valid JSON only."
+    )
+    user = f"""Topic to create: "{prompt}"
+
+All papers currently in the vault:
+<papers>
+{papers_summary}
+</papers>
+
+Existing topics (do NOT propose a name/slug that duplicates one of these):
+{existing_desc}
+
+Select every paper that clearly belongs in this topic. Return a JSON object with this exact schema:
+{{
+  "name": "Human-readable topic name (specific subfield, 3-6 words)",
+  "fingerprint_tags": ["tag1", "tag2", ...],
+  "fingerprint_benchmarks": ["BenchName1", ...],
+  "min_tag_overlap": 1,
+  "papers": ["arxiv_id_1", "arxiv_id_2", ...]
+}}
+
+Rules: fingerprint_tags must be actual tag strings pulled from the selected papers' <tags> \
+fields (4-8 tags, specific to this subfield). min_tag_overlap is 1 or 2 — use 1 if a single \
+tag defines the topic, 2 if overlap is needed to avoid false positives. fingerprint_benchmarks \
+lists benchmark names specific to this subfield (empty list if none are distinctive). If no \
+papers in the vault genuinely fit, return an empty "papers" list."""
+
+    print(f"Asking {extraction_model} to select papers for '{prompt}'...")
+    result = llm.call_json(system, user, extraction_model, api_key)
+    paper_ids = result.get("papers", [])
+    notes_for_topic = [n for n in notes if n.get("arxiv_id") in paper_ids]
+
+    if not notes_for_topic:
+        print("No matching papers found in the vault for this topic.")
+        return
+
+    name = result.get("name") or prompt
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if slug in idx:
+        print(f"Topic '{slug}' already exists. Use update_knowledge or edit .topic_index.json directly.")
+        return
+
+    print(f"Creating '{name}' from {len(notes_for_topic)} paper(s):")
+    for n in notes_for_topic:
+        print(f"  • {n['title']}")
+
+    idx[slug] = {
+        "name":                   name,
+        "file":                   f"Topics/{slug}.md",
+        "fingerprint_tags":       result.get("fingerprint_tags", []),
+        "fingerprint_benchmarks": result.get("fingerprint_benchmarks", []),
+        "min_tag_overlap":        result.get("min_tag_overlap", 2),
+        "papers":                 [],
+        "last_updated":           "",
+    }
+    save_topic_index(idx)
+
+    paper_index = load_paper_index()
+    pool        = _build_citation_pool(notes_for_topic, paper_index)
+    cit_block   = _format_citation_block(pool) if pool else ""
+
+    print(f"\nCalling {model}...")
+    tracker = llm.UsageTracker()
+    content = llm.call(_init_system_prompt(), _init_user_prompt(name, notes_for_topic, cit_block),
+                        model, api_key, tracker=tracker)
+
+    bibliography = _build_jargon_table(pool)
+    idx[slug]["papers"]       = [n["arxiv_id"] for n in notes_for_topic if n.get("arxiv_id")]
+    idx[slug]["last_updated"] = str(date.today())
+    save_topic_index(idx)
+    write_topic_file(slug, name, idx[slug], content, bibliography,
+                      tokens_used=tracker.total_tokens(), cost_usd=tracker.total_cost())
+    print(f"Written: {topic_path(slug)}")
 
 
 def init(
@@ -775,6 +893,7 @@ def list_topics():
 if __name__ == "__main__":
     fire.Fire({
         "create":           create,
+        "add":              add,
         "init":             init,
         "init_all":         init_all,
         "update":           update,
