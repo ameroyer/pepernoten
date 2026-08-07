@@ -123,7 +123,7 @@ uv run --directory /path/to/pepernoten pepernoten-mcp
 
 # via uvx, from a local path or straight from a git remote
 uvx --from /path/to/pepernoten pepernoten-mcp
-uvx --from git+https://github.com/you/pepernoten pepernoten-mcp
+uvx --from git+https://github.com/ameroyer/pepernoten pepernoten-mcp
 ```
 
 pepernoten is not on PyPI, so `uvx` always needs `--from`. To sanity-check a command, run it by hand — it prints `pepernoten-mcp: serving … (read-only)` to stderr on startup.
@@ -150,7 +150,7 @@ claude mcp add pepernoten \
 claude mcp add pepernoten \
   --env PEPERNOTEN_GITHUB_REPO=you/my-notes \
   --env PEPERNOTEN_GITHUB_TOKEN=github_pat_... \
-  -- uvx --from git+https://github.com/you/pepernoten pepernoten-mcp
+  -- uvx --from git+https://github.com/ameroyer/pepernoten pepernoten-mcp
 ```
 
 Equivalent `.mcp.json` / Claude Desktop `claude_desktop_config.json` entry:
